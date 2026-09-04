@@ -465,6 +465,31 @@ class FacebookBridge extends BridgeAbstract
     }
 
     /**
+     * Extracts the external URL of a shared link attachment (e.g. a shared
+     * news article or YouTube video), if the given attachment is one.
+     *
+     * Facebook represents this as a "web_link" node with __typename
+     * "ExternalWebLink" holding the real (already unwrapped) destination
+     * url, nested under styles.attachment.story_attachment_link_renderer.attachment.
+     */
+    private function extractAttachmentUrl($attachment)
+    {
+        $webLink = $this->findFirst($attachment, 'web_link');
+
+        if (!is_array($webLink) || ($webLink['__typename'] ?? null) !== 'ExternalWebLink') {
+            return null;
+        }
+
+        $url = $webLink['url'] ?? null;
+
+        if (!is_string($url) || $url === '') {
+            return null;
+        }
+
+        return $url;
+    }
+
+    /**
      * Extracts the story nodes embedded in the page as JSON.
      *
      * The desktop page ships the most recent post of the timeline inside a
@@ -520,7 +545,7 @@ class FacebookBridge extends BridgeAbstract
     /**
      * Converts a story node into a feed item
      */
-    private function parseTimelineNode($node, $profilePicture)
+    private function parseTimelineNode($node)
     {
         $story = $node['comet_sections']['content']['story'] ?? [];
 
@@ -543,13 +568,20 @@ class FacebookBridge extends BridgeAbstract
                 $content .= '<p><img src="' . $image['uri'] . '" referrerpolicy="no-referrer" /></p>';
                 $enclosures[] = $image['uri'];
             }
+
+            $sharedUrl = $this->extractAttachmentUrl($attachment);
+
+            if ($sharedUrl !== null) {
+                $content .= '<p><a href="' . htmlspecialchars($sharedUrl, ENT_QUOTES) . '">'
+                    . htmlspecialchars($sharedUrl, ENT_QUOTES) . '</a></p>';
+            }
         }
 
         $content = '<p>' . nl2br(htmlspecialchars($text, ENT_QUOTES)) . '</p>' . $content;
 
         $item['content'] = $content;
         $item['title'] = $this->generateTitle($text, $item['timestamp']);
-        $item['enclosures'] = $enclosures ?: [$profilePicture];
+        $item['enclosures'] = $enclosures;
 
         return $item;
     }
@@ -590,9 +622,6 @@ class FacebookBridge extends BridgeAbstract
 
         $this->authorName = html_entity_decode($title->content, ENT_QUOTES, 'UTF-8');
 
-        $image = $html->find('meta[property="og:image"]', 0);
-        $profilePicture = $image ? html_entity_decode($image->content, ENT_QUOTES, 'UTF-8') : '';
-
         $nodes = $this->extractTimelineNodes($html);
 
         if (!$nodes) {
@@ -600,7 +629,7 @@ class FacebookBridge extends BridgeAbstract
         }
 
         foreach ($nodes as $node) {
-            $this->items[] = $this->parseTimelineNode($node, $profilePicture);
+            $this->items[] = $this->parseTimelineNode($node);
         }
     }
 
